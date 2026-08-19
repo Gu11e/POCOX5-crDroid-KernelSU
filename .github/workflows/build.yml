@@ -20,7 +20,8 @@ jobs:
 
     - name: 3. Install Build Dependencies
       run: |
-        sudo apt-get update -o Acquire::Retries=3 || true
+        sudo sed -i 's/azure\.archive\.ubuntu\.com/archive\.ubuntu\.com/g' /etc/apt/sources.list
+        sudo apt-get update -y
         sudo apt-get install -y --no-install-recommends build-essential bc bison flex libssl-dev make zip
     
     - name: 4. Download Compiler (Proton Clang)
