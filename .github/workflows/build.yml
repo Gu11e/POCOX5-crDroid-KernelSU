@@ -34,7 +34,7 @@ jobs:
         DEFCONFIG: moonstone_defconfig 
       run: |
         make O=out ARCH=arm64 $DEFCONFIG
-        make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang
+        make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang HOSTCC=gcc HOSTCXX=g++
 
     - name: 6. Package with AnyKernel3
       run: |
