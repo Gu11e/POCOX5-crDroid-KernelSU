@@ -25,13 +25,13 @@ jobs:
     - name: 4. Download Compiler (Proton Clang)
       run: |
         git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton-clang
+        echo "${{ github.workspace }}/proton-clang/bin" >> $GITHUB_PATH
 
     - name: 5. Build the Kernel
       env:
         ARCH: arm64
         SUBARCH: arm64
         DEFCONFIG: moonstone_defconfig 
-        PATH: ${{ github.workspace }}/proton-clang/bin:${{ env.PATH }}
       run: |
         make O=out ARCH=arm64 $DEFCONFIG
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang
