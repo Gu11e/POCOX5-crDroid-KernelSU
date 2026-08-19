@@ -1,0 +1,46 @@
+name: Build Kernel with KernelSU
+
+on:
+  workflow_dispatch: 
+  push:
+    branches:
+      - '16.0' 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 1. Download Kernel source code
+      uses: actions/checkout@v3
+
+    - name: 2. Inject KernelSU Next
+      run: |
+        curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -
+        
+    - name: 3. Download compiler (Proton Clang)
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton-clang
+
+    - name: 4. Compile the kernel
+      env:
+        ARCH: arm64
+        SUBARCH: arm64
+        DEFCONFIG: moonstone_defconfig 
+        PATH: ${{ github.workspace }}/proton-clang/bin:${{ env.PATH }}
+      run: |
+        make O=out ARCH=arm64 $DEFCONFIG
+        make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang
+
+    - name: 5. Package with AnyKernel3
+      run: |
+        git clone https://github.com/Gu11e/AnyKernel3-POCOX5.git AnyKernel3
+        cp out/arch/arm64/boot/Image AnyKernel3/
+        cd AnyKernel3
+        zip -r9 ../Kernel-KSU-POCOX5.zip * -x .git README.md *placeholder
+
+    - name: 6. Upload .zip final file
+      uses: actions/upload-artifact@v3
+      with:
+        name: Kernel-KSU-POCOX5
+        path: Kernel-KSU-POCOX5.zip
