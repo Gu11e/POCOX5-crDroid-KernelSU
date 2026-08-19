@@ -4,25 +4,25 @@ on:
   workflow_dispatch: 
   push:
     branches:
-      - '16.0' 
+      - '16.0'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     
     steps:
-    - name: 1. Download Kernel source code
-      uses: actions/checkout@v3
+    - name: 1. Checkout Kernel Source Code
+      uses: actions/checkout@v4
 
     - name: 2. Inject KernelSU Next
       run: |
         curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -
         
-    - name: 3. Download compiler (Proton Clang)
+    - name: 3. Download Compiler (Proton Clang)
       run: |
         git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton-clang
 
-    - name: 4. Compile the kernel
+    - name: 4. Build the Kernel
       env:
         ARCH: arm64
         SUBARCH: arm64
@@ -39,8 +39,8 @@ jobs:
         cd AnyKernel3
         zip -r9 ../Kernel-KSU-POCOX5.zip * -x .git README.md *placeholder
 
-    - name: 6. Upload .zip final file
-      uses: actions/upload-artifact@v3
+    - name: 6. Upload Final .zip Artifact
+      uses: actions/upload-artifact@v4
       with:
         name: Kernel-KSU-POCOX5
         path: Kernel-KSU-POCOX5.zip
