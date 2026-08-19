@@ -17,12 +17,17 @@ jobs:
     - name: 2. Inject KernelSU Next
       run: |
         curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -
-        
-    - name: 3. Download Compiler (Proton Clang)
+
+    - name: 3. Install Build Dependencies
+      run: |
+        apt-get update
+        apt-get install build-essential bc bison flex libssl-dev make zip
+    
+    - name: 4. Download Compiler (Proton Clang)
       run: |
         git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton-clang
 
-    - name: 4. Build the Kernel
+    - name: 5. Build the Kernel
       env:
         ARCH: arm64
         SUBARCH: arm64
@@ -32,14 +37,14 @@ jobs:
         make O=out ARCH=arm64 $DEFCONFIG
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang
 
-    - name: 5. Package with AnyKernel3
+    - name: 6. Package with AnyKernel3
       run: |
         git clone https://github.com/Gu11e/AnyKernel3-POCOX5.git AnyKernel3
         cp out/arch/arm64/boot/Image AnyKernel3/
         cd AnyKernel3
         zip -r9 ../Kernel-KSU-POCOX5.zip * -x .git README.md *placeholder
 
-    - name: 6. Upload Final .zip Artifact
+    - name: 7. Upload Final .zip Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Kernel-KSU-POCOX5
