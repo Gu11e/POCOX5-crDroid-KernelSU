@@ -14,29 +14,36 @@ jobs:
     - name: 1. Checkout Kernel Source Code
       uses: actions/checkout@v4
 
-    - name: 2. Inject KernelSU Next
+    - name: 2. Inject KernelSU Next (Legacy Non-GKI)
       run: |
-        curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -
-        
-        sed -i '1i #include <linux/init.h>' drivers/kernelsu/feature/sulog.h
+        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
 
     - name: 3. Install Build Dependencies
       run: |
+        sudo apt-get update
         sudo apt-get install -y --no-install-recommends build-essential bc bison flex libssl-dev make zip
     
     - name: 4. Download Compiler (Proton Clang)
       run: |
         git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton-clang
 
-    - name: 5. Build the Kernel
+    - name: 5. Configure & Build the Kernel
       env:
         ARCH: arm64
         SUBARCH: arm64
         DEFCONFIG: moonstone_defconfig 
         PATH: ${{ github.workspace }}/proton-clang/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        KCFLAGS: "-O3 -march=armv8.2-a"
       run: |
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang $DEFCONFIG
+        
+        scripts/config --file out/.config -e CC_OPTIMIZE_FOR_PERFORMANCE
+        scripts/config --file out/.config -e LTO_CLANG_THIN
+        scripts/config --file out/.config -d LTO_NONE
+        scripts/config --file out/.config -d LTO_CLANG_FULL
+        
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang olddefconfig
+        
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang HOSTCC=gcc HOSTCXX=g++ HOSTLD=/usr/bin/ld
 
     - name: 6. Package with AnyKernel3
