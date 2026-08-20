@@ -32,30 +32,27 @@ jobs:
         SUBARCH: arm64
         DEFCONFIG: moonstone_defconfig 
         PATH: ${{ github.workspace }}/proton-clang/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        KCFLAGS: "-O3 -march=armv8.2-a"
+        KCFLAGS: "-march=armv8.2-a"
       run: |
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang $DEFCONFIG
 
-        CONFIG_KPROBES=y
-        CONFIG_KPROBE_EVENTS=y
-        CONFIG_KSU_KPROBE_HOOKS=y
-        CONFIG_KSU=y
-        
+        scripts/config --file out/.config -e KPROBES
+        scripts/config --file out/.config -e KPROBE_EVENTS
+        scripts/config --file out/.config -e KSU_KPROBE_HOOKS
+        scripts/config --file out/.config -e KSU
         scripts/config --file out/.config -e INPUT
         scripts/config --file out/.config -e KALLSYMS
         scripts/config --file out/.config -e KALLSYMS_ALL
-        
         scripts/config --file out/.config -e OVERLAY_FS
         scripts/config --file out/.config -e TMPFS_XATTR
         scripts/config --file out/.config -e TMPFS_POSIX_ACL
-        
-        scripts/config --file out/.config -e CC_OPTIMIZE_FOR_PERFORMANCE
-        scripts/config --file out/.config -e LTO_CLANG_THIN
-        scripts/config --file out/.config -d LTO_NONE
-        scripts/config --file out/.config -d LTO_CLANG_FULL
-        
+
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang olddefconfig
-        
+
+        echo "===== KSU CONFIG ====="
+        grep -E 'CONFIG_(KSU|KPROBE)' out/.config || true
+        grep -R "KSU_KPROBE" -n drivers/kernelsu/Kconfig drivers/kernelsu
+
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang HOSTCC=gcc HOSTCXX=g++ HOSTLD=/usr/bin/ld
 
     - name: 6. Package with AnyKernel3
