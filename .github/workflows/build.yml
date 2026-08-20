@@ -17,7 +17,6 @@ jobs:
     - name: 2. Inject KernelSU Next (Legacy Non-GKI)
       run: |
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
-
     - name: 3. Install Build Dependencies
       run: |
         sudo apt-get update
@@ -36,12 +35,11 @@ jobs:
         KCFLAGS: "-O3 -march=armv8.2-a"
       run: |
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang $DEFCONFIG
-        
-        scripts/config --file out/.config -e KSU
-        scripts/config --file out/.config -d KSU_KPROBE_HOOKS
-        scripts/config --file out/.config -e KPROBES
-        scripts/config --file out/.config -e KPROBE_EVENTS
-        scripts/config --file out/.config -e MODULES
+
+        CONFIG_KPROBES=y
+        CONFIG_KPROBE_EVENTS=y
+        CONFIG_KSU_KPROBE_HOOKS=y
+        CONFIG_KSU=y
         
         scripts/config --file out/.config -e INPUT
         scripts/config --file out/.config -e KALLSYMS
