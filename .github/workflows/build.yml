@@ -37,6 +37,7 @@ jobs:
       run: |
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang $DEFCONFIG
         
+        scripts/config --file out/.config -e KSU
         scripts/config --file out/.config -e CC_OPTIMIZE_FOR_PERFORMANCE
         scripts/config --file out/.config -e LTO_CLANG_THIN
         scripts/config --file out/.config -d LTO_NONE
