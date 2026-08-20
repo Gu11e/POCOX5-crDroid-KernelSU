@@ -52,6 +52,22 @@ jobs:
         echo "===== KSU CONFIG ====="
         grep -E 'CONFIG_(KSU|KPROBE)' out/.config || true
         grep -R "KSU_KPROBE" -n drivers/kernelsu/Kconfig drivers/kernelsu
+        echo "=== Searching ksu_input_hook definitions ==="
+        grep -Rnw . \
+        --include='*.c' \
+        --include='*.h' \
+        --include='Kconfig' \
+        --include='Makefile' \
+        -e 'ksu_input_hook' || true
+
+        echo "=== selinux_hide.c relevant code ==="
+        sed -n '1,110p' drivers/kernelsu/feature/selinux_hide.c
+
+        echo "=== KSU Kconfig ==="
+        sed -n '1,100p' drivers/kernelsu/Kconfig
+
+        echo "=== KSU Kbuild ==="
+        sed -n '100,155p' drivers/kernelsu/Kbuild
 
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang HOSTCC=gcc HOSTCXX=g++ HOSTLD=/usr/bin/ld
 
