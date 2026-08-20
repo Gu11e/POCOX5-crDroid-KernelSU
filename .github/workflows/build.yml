@@ -17,6 +17,8 @@ jobs:
     - name: 2. Inject KernelSU Next
       run: |
         curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -
+        
+        sed -i '1i #include <linux/init.h>' drivers/kernelsu/feature/sulog.h
 
     - name: 3. Install Build Dependencies
       run: |
