@@ -33,7 +33,8 @@ jobs:
         DEFCONFIG: moonstone_defconfig 
         PATH: ${{ github.workspace }}/proton-clang/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       run: |
-        make O=out ARCH=arm64 $DEFCONFIG
+        make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang $DEFCONFIG
+        make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang olddefconfig
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang HOSTCC=gcc HOSTCXX=g++ HOSTLD=/usr/bin/ld
 
     - name: 6. Package with AnyKernel3
