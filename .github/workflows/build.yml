@@ -17,6 +17,52 @@ jobs:
     - name: 2. Inject KernelSU Next (Legacy Non-GKI)
       run: |
         curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
+        
+        python3 - <<'PY'
+        from pathlib import Path
+
+        p = Path("drivers/kernelsu/feature/selinux_hide.c")
+        s = p.read_text()
+
+        old = """#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
+        extern bool ksu_input_hook __read_mostly __attribute__((weak));
+        #else
+        extern bool ksu_input_hook __read_mostly;
+        #endif
+        """
+
+        new = """#ifndef CONFIG_KSU_KPROBES_HOOK
+        #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
+        extern bool ksu_input_hook __read_mostly __attribute__((weak));
+        #else
+        extern bool ksu_input_hook __read_mostly;
+        #endif
+        #endif
+        """
+
+        if old not in s:
+          raise SystemExit("ksu_input_hook declaration pattern not found")
+
+        s = s.replace(old, new, 1)
+
+        old = """\twhile (READ_ONCE(ksu_input_hook))
+        \t\tmsleep(5000);
+        """
+
+        new = """#ifndef CONFIG_KSU_KPROBES_HOOK
+        \twhile (READ_ONCE(ksu_input_hook))
+        \t\tmsleep(5000);
+        #endif
+        """
+
+        if old not in s:
+          raise SystemExit("ksu_input_hook wait pattern not found")
+
+        s = s.replace(old, new, 1)
+
+        p.write_text(s)
+        PY
+
     - name: 3. Install Build Dependencies
       run: |
         sudo apt-get update
@@ -68,6 +114,16 @@ jobs:
 
         echo "=== KSU Kbuild ==="
         sed -n '100,155p' drivers/kernelsu/Kbuild
+
+        echo "=== KSU INPUT HOOK CHECK ==="
+
+        grep -n "ksu_input_hook" drivers/kernelsu/runtime/ksud_integration.c
+        grep -n "ksu_input_hook" drivers/kernelsu/feature/selinux_hide.c
+
+        echo "=== KSUD INPUT OBJECT ==="
+        grep -R "ksud_integration.o" -n drivers/kernelsu
+
+        grep -n -B4 -A6 "ksu_input_hook" drivers/kernelsu/feature/selinux_hide.c
 
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang HOSTCC=gcc HOSTCXX=g++ HOSTLD=/usr/bin/ld
 
