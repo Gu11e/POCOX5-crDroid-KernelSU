@@ -38,15 +38,14 @@ jobs:
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang $DEFCONFIG
         
         scripts/config --file out/.config -e KSU
-        scripts/config --file out/.config -e KSU_HOOK_INPUT
-        scripts/config --file out/.config -e KSU_SELINUX_HIDE
+        scripts/config --file out/.config -e KSU_KPROBE_HOOKS
+        scripts/config --file out/.config -e KPROBES
+        scripts/config --file out/.config -e KPROBE_EVENTS
+        scripts/config --file out/.config -e MODULES
         
         scripts/config --file out/.config -e OVERLAY_FS
         scripts/config --file out/.config -e TMPFS_XATTR
         scripts/config --file out/.config -e TMPFS_POSIX_ACL
-        scripts/config --file out/.config -e KPROBES
-        scripts/config --file out/.config -e HAVE_KPROBES
-        scripts/config --file out/.config -e KPROBE_EVENTS
         
         scripts/config --file out/.config -e CC_OPTIMIZE_FOR_PERFORMANCE
         scripts/config --file out/.config -e LTO_CLANG_THIN
