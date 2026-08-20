@@ -43,6 +43,10 @@ jobs:
         scripts/config --file out/.config -e KPROBE_EVENTS
         scripts/config --file out/.config -e MODULES
         
+        scripts/config --file out/.config -e INPUT
+        scripts/config --file out/.config -e KALLSYMS
+        scripts/config --file out/.config -e KALLSYMS_ALL
+        
         scripts/config --file out/.config -e OVERLAY_FS
         scripts/config --file out/.config -e TMPFS_XATTR
         scripts/config --file out/.config -e TMPFS_POSIX_ACL
