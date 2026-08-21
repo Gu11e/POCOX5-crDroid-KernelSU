@@ -1,26 +1,345 @@
 name: Build Kernel with KernelSU-Next
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
   push:
     branches:
       - '16.0'
 
 permissions:
-    contents: write
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    
+
     steps:
     - name: 1. Checkout Kernel Source Code
       uses: actions/checkout@v4
 
-    - name: 2. Inject KernelSU Next (Legacy Non-GKI)
+    - name: 2. Inject KernelSU Next (Legacy Manual Hooks)
       run: |
-        curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
-        
+        curl -LSs \
+          "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+          | bash -s legacy
+
+        echo "KernelSU Next source injected."
+
+    - name: 3. Apply KernelSU Next Manual Hooks
+      run: |
+        python3 - <<'PY'
+        from pathlib import Path
+
+        def patch_file(path_str, replacements):
+            path = Path(path_str)
+            text = path.read_text()
+
+            for name, old, new in replacements:
+                count = text.count(old)
+
+                if count != 1:
+                    raise SystemExit(
+                        f"[ERROR] {path}: pattern '{name}' found {count} times; "
+                        "expected exactly 1 match."
+                    )
+
+                text = text.replace(old, new, 1)
+                print(f"[OK] {path}: applied {name}")
+
+            path.write_text(text)
+
+        # ========================================================
+        # fs/exec.c
+        # ========================================================
+        patch_file(
+            "fs/exec.c",
+            [
+                (
+                    "exec declarations",
+                    '#include <linux/tracehook.h>\n',
+                    '''#include <linux/tracehook.h>
+
+        #ifdef CONFIG_KSU
+        __attribute__((hot))
+        extern int ksu_handle_execveat(
+            int *fd,
+            struct filename **filename_ptr,
+            void *argv,
+            void *envp,
+            int *flags
+        );
+        #endif
+        ''',
+                ),
+                (
+                    "do_execve hook",
+                    '''int do_execve(struct filename *filename,
+                const char __user *const __user *__argv,
+                const char __user *const __user *__envp)
+        {
+                struct user_arg_ptr argv = { .ptr.native = __argv };
+                struct user_arg_ptr envp = { .ptr.native = __envp };
+                return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+        }''',
+                    '''int do_execve(struct filename *filename,
+                const char __user *const __user *__argv,
+                const char __user *const __user *__envp)
+        {
+                struct user_arg_ptr argv = { .ptr.native = __argv };
+                struct user_arg_ptr envp = { .ptr.native = __envp };
+
+        #ifdef CONFIG_KSU
+                ksu_handle_execveat(
+                    (int *)AT_FDCWD,
+                    &filename,
+                    &argv,
+                    &envp,
+                    0
+                );
+        #endif
+
+                return do_execveat_common(
+                    AT_FDCWD,
+                    filename,
+                    argv,
+                    envp,
+                    0
+                );
+        }''',
+                ),
+                (
+                    "compat_do_execve hook",
+                    '''static int compat_do_execve(struct filename *filename,
+                const compat_uptr_t __user *__argv,
+                const compat_uptr_t __user *__envp)
+        {
+                struct user_arg_ptr argv = {
+                        .is_compat = true,
+                        .ptr.compat = __argv,
+                };
+                struct user_arg_ptr envp = {
+                        .is_compat = true,
+                        .ptr.compat = __envp,
+                };
+                return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+        }''',
+                    '''static int compat_do_execve(struct filename *filename,
+                const compat_uptr_t __user *__argv,
+                const compat_uptr_t __user *__envp)
+        {
+                struct user_arg_ptr argv = {
+                        .is_compat = true,
+                        .ptr.compat = __argv,
+                };
+                struct user_arg_ptr envp = {
+                        .is_compat = true,
+                        .ptr.compat = __envp,
+                };
+
+        #ifdef CONFIG_KSU
+                ksu_handle_execveat(
+                    (int *)AT_FDCWD,
+                    &filename,
+                    &argv,
+                    &envp,
+                    0
+                );
+        #endif
+
+                return do_execveat_common(
+                    AT_FDCWD,
+                    filename,
+                    argv,
+                    envp,
+                    0
+                );
+        }''',
+                ),
+            ],
+        )
+
+        # ========================================================
+        # fs/open.c
+        # ========================================================
+        patch_file(
+            "fs/open.c",
+            [
+                (
+                    "faccessat declaration",
+                    '#include "internal.h"\n',
+                    '''#include "internal.h"
+
+        #ifdef CONFIG_KSU
+        __attribute__((hot))
+        extern int ksu_handle_faccessat(
+            int *dfd,
+            const char __user **filename_user,
+            int *mode,
+            int *flags
+        );
+        #endif
+        ''',
+                ),
+                (
+                    "faccessat hook",
+                    '''SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+        {
+                return do_faccessat(dfd, filename, mode);
+        }''',
+                    '''SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+        {
+        #ifdef CONFIG_KSU
+                ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
+        #endif
+
+                return do_faccessat(dfd, filename, mode);
+        }''',
+                ),
+            ],
+        )
+
+        # ========================================================
+        # fs/read_write.c
+        # ========================================================
+        patch_file(
+            "fs/read_write.c",
+            [
+                (
+                    "vfs_read declarations",
+                    '#include <linux/uio.h>\n',
+                    '''#include <linux/uio.h>
+
+        #ifdef CONFIG_KSU
+        extern bool ksu_vfs_read_hook __read_mostly;
+        extern __attribute__((cold)) int ksu_handle_sys_read(
+            unsigned int fd,
+            char __user **buf_ptr,
+            size_t *count_ptr
+        );
+        #endif
+        ''',
+                ),
+                (
+                    "vfs_read hook",
+                    '''ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+        {
+                ssize_t ret;
+                if (!(file->f_mode & FMODE_READ))
+                        return -EBADF;''',
+                    '''ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+        {
+                ssize_t ret;
+
+        #ifdef CONFIG_KSU
+                if (unlikely(ksu_vfs_read_hook))
+                        ksu_handle_sys_read(
+                            (unsigned int)-1,
+                            &buf,
+                            &count
+                        );
+        #endif
+
+                if (!(file->f_mode & FMODE_READ))
+                        return -EBADF;''',
+                ),
+            ],
+        )
+
+        # ========================================================
+        # fs/stat.c
+        # ========================================================
+        patch_file(
+            "fs/stat.c",
+            [
+                (
+                    "stat declaration",
+                    '#include <linux/syscalls.h>\n',
+                    '''#include <linux/syscalls.h>
+
+        #ifdef CONFIG_KSU
+        __attribute__((hot))
+        extern int ksu_handle_stat(
+            int *dfd,
+            const char __user **filename_user,
+            int *flags
+        );
+        #endif
+        ''',
+                ),
+                (
+                    "newfstatat hook",
+                    '''SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+                        struct stat __user *, statbuf, int, flag)
+        {
+                struct kstat stat;
+                int error;''',
+                    '''SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+                        struct stat __user *, statbuf, int, flag)
+        {
+                struct kstat stat;
+                int error;
+
+        #ifdef CONFIG_KSU
+                ksu_handle_stat(&dfd, &filename, &flag);
+        #endif''',
+                ),
+            ],
+        )
+
+        # ========================================================
+        # kernel/reboot.c
+        # ========================================================
+        patch_file(
+            "kernel/reboot.c",
+            [
+                (
+                    "reboot declaration",
+                    '''#include <linux/reboot.h>
+        ''',
+                    '''#include <linux/reboot.h>
+
+        #ifdef CONFIG_KSU
+        extern int ksu_handle_sys_reboot(
+            int magic1,
+            int magic2,
+            unsigned int cmd,
+            void __user **arg
+        );
+        #endif
+        ''',
+                ),
+                (
+                    "reboot hook",
+                    '''SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+                void __user *, arg)
+        {
+                struct pid_namespace *pid_ns = task_active_pid_ns(current);
+                char buffer[256];
+                int ret = 0;''',
+                    '''SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+                void __user *, arg)
+        {
+                struct pid_namespace *pid_ns = task_active_pid_ns(current);
+                char buffer[256];
+                int ret = 0;
+
+        #ifdef CONFIG_KSU
+                ksu_handle_sys_reboot(
+                    magic1,
+                    magic2,
+                    cmd,
+                    &arg
+                );
+        #endif''',
+                ),
+            ],
+        )
+
+        print("All manual KernelSU hooks applied successfully.")
+        PY
+
+    - name: 4. Patch KernelSU SELinux Hide Compatibility
+      run: |
         python3 - <<'PY'
         from pathlib import Path
 
@@ -44,7 +363,9 @@ jobs:
         """
 
         if old not in s:
-          raise SystemExit("ksu_input_hook declaration pattern not found")
+            raise SystemExit(
+                "ERROR: ksu_input_hook declaration pattern not found"
+            )
 
         s = s.replace(old, new, 1)
 
@@ -59,123 +380,182 @@ jobs:
         """
 
         if old not in s:
-          raise SystemExit("ksu_input_hook wait pattern not found")
+            raise SystemExit(
+                "ERROR: ksu_input_hook wait pattern not found"
+            )
 
         s = s.replace(old, new, 1)
 
         p.write_text(s)
+        print("[OK] selinux_hide.c patched.")
         PY
 
-    - name: 3. Install Build Dependencies
+    - name: 5. Install Build Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends build-essential bc bison flex libssl-dev make zip unzip
-    
-    - name: 4. Download Compiler (Proton Clang)
-      run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton-clang
 
-    - name: 5. Configure & Build the Kernel
+    - name: 6. Download Compiler (Proton Clang)
+      run: |
+        git clone --depth=1 \
+          https://github.com/kdrag0n/proton-clang.git \
+          proton-clang
+
+    - name: 7. Configure & Build the Kernel
       env:
         ARCH: arm64
         SUBARCH: arm64
-        DEFCONFIG: moonstone_defconfig 
+        DEFCONFIG: moonstone_defconfig
         PATH: ${{ github.workspace }}/proton-clang/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         KCFLAGS: "-march=armv8.2-a -O2"
+
       run: |
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 $DEFCONFIG
 
-        scripts/config --file out/.config -e KPROBES
-        scripts/config --file out/.config -e KPROBE_EVENTS
-        scripts/config --file out/.config -e KSU_KPROBES_HOOK
         scripts/config --file out/.config -e KSU
+
+        scripts/config --file out/.config -d KPROBES
+        scripts/config --file out/.config -d KPROBE_EVENTS
+        scripts/config --file out/.config -d KSU_KPROBES_HOOK
+        scripts/config --file out/.config -d KSU_KPROBE_HOOKS
+
         scripts/config --file out/.config -e INPUT
         scripts/config --file out/.config -e KALLSYMS
         scripts/config --file out/.config -e KALLSYMS_ALL
         scripts/config --file out/.config -e OVERLAY_FS
         scripts/config --file out/.config -e TMPFS_XATTR
         scripts/config --file out/.config -e TMPFS_POSIX_ACL
-
         scripts/config --file out/.config -e LTO_CLANG_THIN
         scripts/config --file out/.config -d LTO_CLANG_FULL
         scripts/config --file out/.config -d LTO_NONE
-        
+
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 olddefconfig
-        
+
+        echo "===== KernelSU configuration ====="
+        grep -E \
+          '^(CONFIG_KSU|CONFIG_KPROBES|CONFIG_KPROBE_EVENTS|CONFIG_KSU_KPROBE|CONFIG_OVERLAY_FS|CONFIG_TMPFS_XATTR|CONFIG_TMPFS_POSIX_ACL)=' \
+          out/.config || true
+
+        echo "===== Checking that Kprobes hooks are disabled ====="
+
+        if grep -q '^CONFIG_KPROBES=y' out/.config; then
+          echo "ERROR: CONFIG_KPROBES is still enabled."
+          exit 1
+        fi
+
+        if grep -q '^CONFIG_KPROBE_EVENTS=y' out/.config; then
+          echo "ERROR: CONFIG_KPROBE_EVENTS is still enabled."
+          exit 1
+        fi
+
+        if grep -q '^CONFIG_KSU_KPROBE_HOOKS=y' out/.config; then
+          echo "ERROR: KSU Kprobe hooks are still enabled."
+          exit 1
+        fi
+
+        if grep -q '^CONFIG_KSU_KPROBES_HOOK=y' out/.config; then
+          echo "ERROR: KSU Kprobes hook option is still enabled."
+          exit 1
+        fi
+
+        if ! grep -q '^CONFIG_KSU=y' out/.config; then
+          echo "ERROR: CONFIG_KSU=y was not enabled."
+          exit 1
+        fi
+
+        echo "KernelSU manual-hook configuration verified."
+
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1
 
-    - name: 6. Package with AnyKernel3
+    - name: 8. Package with AnyKernel3
       run: |
-        git clone https://github.com/Gu11e/AnyKernel3-POCOX5.git AnyKernel3
+        git clone \
+          https://github.com/Gu11e/AnyKernel3-POCOX5.git \
+          AnyKernel3
+
         cp out/arch/arm64/boot/Image AnyKernel3/
+
         cd AnyKernel3
-        
-        ZIP_MSG="Kernel moonstone with KernelSU-Next by ${{ github.actor }}"
-        sed -i "s/kernel.string=.*/kernel.string=$ZIP_MSG/g" anykernel.sh
-        
-        zip -r9 ../POCOX5-KernelSU-Next.zip * -x .git README.md *placeholder
 
-    - name: 7. Validate ZIP
+        ZIP_MSG="Kernel moonstone with KernelSU-Next Manual Hooks by ${{ github.actor }}"
+
+        sed -i \
+          "s/kernel.string=.*/kernel.string=$ZIP_MSG/g" \
+          anykernel.sh
+
+        zip -r9 \
+          ../POCOX5-KernelSU-Next.zip \
+          * \
+          -x .git README.md *placeholder
+
+    - name: 9. Validate ZIP
       run: |
-          test -f POCOX5-KernelSU-Next.zip
+        test -f POCOX5-KernelSU-Next.zip
 
-          echo "===== ZIP CONTENTS ====="
-          unzip -l POCOX5-KernelSU-Next.zip
+        echo "===== ZIP CONTENTS ====="
+        unzip -l POCOX5-KernelSU-Next.zip
 
-          echo "===== ZIP TEST ====="
-          unzip -t POCOX5-KernelSU-Next.zip
+        echo "===== ZIP TEST ====="
+        unzip -t POCOX5-KernelSU-Next.zip
 
-          echo "===== REQUIRED FILES ====="
-          unzip -Z1 POCOX5-KernelSU-Next.zip | grep -Fx "Image"
-          unzip -Z1 POCOX5-KernelSU-Next.zip | grep -Fx "anykernel.sh"
+        echo "===== REQUIRED FILES ====="
+        unzip -Z1 POCOX5-KernelSU-Next.zip | grep -Fx "Image"
+        unzip -Z1 POCOX5-KernelSU-Next.zip | grep -Fx "anykernel.sh"
 
-    - name: 8. Generate Build Version
+    - name: 10. Generate Build Version
       id: version
       run: |
-          BUILD_DATE="$(git show -s --date=format:'%Y.%m.%d' --format='%cd' HEAD)"
-          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
-          VERSION="v${BUILD_DATE}-${SHORT_SHA}"
+        BUILD_DATE="$(git show -s --date=format:'%Y.%m.%d' --format='%cd' HEAD)"
+        SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+        VERSION="v${BUILD_DATE}-${SHORT_SHA}"
 
-          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
-          echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
-          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+        echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
+        echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
+        echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
-          echo "Version: ${VERSION}"
-          echo "Commit:  $(git rev-parse HEAD)"
+        echo "Version: ${VERSION}"
+        echo "Commit:  $(git rev-parse HEAD)"
 
-    - name: 9. Rename Release Files
+    - name: 11. Rename Release Files
       run: |
-          mv POCOX5-KernelSU-Next.zip "POCOX5-KernelSU-Next-${VERSION}.zip"
+        mv \
+          POCOX5-KernelSU-Next.zip \
+          "POCOX5-KernelSU-Next-${VERSION}.zip"
 
-          sha256sum "POCOX5-KernelSU-Next-${VERSION}.zip" > "POCOX5-KernelSU-Next-${VERSION}.zip.sha256"
+        sha256sum \
+          "POCOX5-KernelSU-Next-${VERSION}.zip" \
+          > "POCOX5-KernelSU-Next-${VERSION}.zip.sha256"
 
-          echo "===== SHA256 ====="
-          cat "POCOX5-KernelSU-Next-${VERSION}.zip.sha256"
+        echo "===== SHA256 ====="
+        cat \
+          "POCOX5-KernelSU-Next-${VERSION}.zip.sha256"
 
-    - name: 10. Upload Build Artifact
+    - name: 12. Upload Build Artifact
       uses: actions/upload-artifact@v4
       with:
         name: "POCOX5-KernelSU-Next-${{ env.VERSION }}"
         path: |
-            POCOX5-KernelSU-Next-${{ env.VERSION }}.zip
-            POCOX5-KernelSU-Next-${{ env.VERSION }}.zip.sha256
+          POCOX5-KernelSU-Next-${{ env.VERSION }}.zip
+          POCOX5-KernelSU-Next-${{ env.VERSION }}.zip.sha256
         retention-days: 14
 
-    - name: 11. Create GitHub Release
+    - name: 13. Create GitHub Release
       if: github.event_name == 'push'
       env:
-          GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ github.token }}
+
       run: |
-          gh release create "${VERSION}" \
-            "POCOX5-KernelSU-Next-${VERSION}.zip" \
-            "POCOX5-KernelSU-Next-${VERSION}.zip.sha256" \
-            --target "${GITHUB_SHA}" \
-            --title "POCO X5 KernelSU-Next ${VERSION}" \
-            --notes "Automated kernel build.
+        gh release create "${VERSION}" \
+          "POCOX5-KernelSU-Next-${VERSION}.zip" \
+          "POCOX5-KernelSU-Next-${VERSION}.zip.sha256" \
+          --target "${GITHUB_SHA}" \
+          --title "POCO X5 KernelSU-Next ${VERSION}" \
+          --notes "Automated kernel build.
 
-          Device: POCO X5 5G (moonstone)
-          KernelSU-Next: legacy / Kprobes
-          Commit: ${GITHUB_SHA}
+        Device: POCO X5 5G (moonstone)
+        KernelSU-Next: legacy / manual hooks
+        Kprobes: disabled
+        Commit: ${GITHUB_SHA}
 
-          SHA-256:
-          $(cat "POCOX5-KernelSU-Next-${VERSION}.zip.sha256")"
+        SHA-256:
+        $(cat "POCOX5-KernelSU-Next-${VERSION}.zip.sha256")"
