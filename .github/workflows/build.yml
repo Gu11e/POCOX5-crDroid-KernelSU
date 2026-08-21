@@ -81,9 +81,9 @@ jobs:
         SUBARCH: arm64
         DEFCONFIG: moonstone_defconfig 
         PATH: ${{ github.workspace }}/proton-clang/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        KCFLAGS: "-march=armv8.2-a"
+        KCFLAGS: "-march=armv8.2-a -O2"
       run: |
-        make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang $DEFCONFIG
+        make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 $DEFCONFIG
 
         scripts/config --file out/.config -e KPROBES
         scripts/config --file out/.config -e KPROBE_EVENTS
@@ -96,15 +96,13 @@ jobs:
         scripts/config --file out/.config -e TMPFS_XATTR
         scripts/config --file out/.config -e TMPFS_POSIX_ACL
 
-        make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang olddefconfig
+        scripts/config --file out/.config -e LTO_CLANG_THIN
+        scripts/config --file out/.config -d LTO_CLANG_FULL
+        scripts/config --file out/.config -d LTO_NONE
         
-        echo "===== LTO / COMPILER CONFIG ====="
-        grep -E 'CONFIG_(LTO|CLANG|CFI|THIN)' out/.config
-
-        echo "===== PERFORMANCE CONFIG ====="
-        grep -E 'CONFIG_(SCHED|PREEMPT|UCLAMP|ENERGY_MODEL|CPU_FREQ|CPU_IDLE|IOSCHED|ZRAM|F2FS|THERMAL)' out/.config
+        make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 olddefconfig
         
-        make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang HOSTCC=gcc HOSTCXX=g++ HOSTLD=/usr/bin/ld
+        make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1
 
     - name: 6. Package with AnyKernel3
       run: |
