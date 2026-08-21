@@ -33,7 +33,30 @@ jobs:
           kernelsu-coccinelle
 
         cd kernelsu-coccinelle/scope-minimized-hooks
+
         ./apply.sh "$GITHUB_WORKSPACE"
+
+        cd "$GITHUB_WORKSPACE"
+
+        echo "===== KernelSU manual hook symbols ====="
+
+        grep -RnsE \
+          "ksu_execveat_hook|ksu_handle_execveat|ksu_handle_faccessat|ksu_handle_sys_read|ksu_handle_stat|ksu_handle_sys_reboot" \
+          fs/exec.c \
+          fs/open.c \
+          fs/read_write.c \
+          fs/stat.c \
+          kernel/reboot.c \
+          drivers/input/input.c \
+          2>/dev/null || true
+
+        echo "===== KernelSU manual hook config ====="
+
+        scripts/config --file out/.config -e KSU_MANUAL_HOOK
+
+        grep -E \
+          '^CONFIG_KSU_MANUAL_HOOK=|^CONFIG_KSU_KPROBES_HOOK=' \
+          out/.config || true
 
     - name: 4. Patch KernelSU SELinux Hide Compatibility
       run: |
@@ -107,8 +130,9 @@ jobs:
 
       run: |
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 $DEFCONFIG
-
+        
         scripts/config --file out/.config -e KSU
+        scripts/config --file out/.config -e KSU_MANUAL_HOOK
         scripts/config --file out/.config -d KPROBES
         scripts/config --file out/.config -d KPROBE_EVENTS
         scripts/config --file out/.config -d KSU_KPROBES_HOOK
@@ -153,6 +177,24 @@ jobs:
           exit 1
         fi
 
+        echo "===== MANUAL HOOKS ====="
+
+        grep -RnsE \
+          "ksu_execveat_hook|ksu_handle_execveat|ksu_handle_faccessat|ksu_handle_sys_read|ksu_handle_stat|ksu_handle_sys_reboot" \
+          fs/exec.c \
+          fs/open.c \
+          fs/read_write.c \
+          fs/stat.c \
+          kernel/reboot.c \
+          drivers/input/input.c \
+          2>/dev/null || true
+
+        echo "===== CONFIG ====="
+      
+        grep -E \
+          '^CONFIG_KSU=|^CONFIG_KSU_MANUAL_HOOK=|^CONFIG_KPROBES=|^CONFIG_KPROBE_EVENTS=|^CONFIG_KSU_KPROBES_HOOK=' \
+          out/.config
+        
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1
 
     - name: 8. Package with AnyKernel3
