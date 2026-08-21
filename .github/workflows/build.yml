@@ -25,38 +25,208 @@ jobs:
 
     - name: 3. Apply KernelSU Next Manual Hooks
       run: |
-        sudo apt-get update
-        sudo apt-get install -y coccinelle
+        python3 - <<'PY'
+        from pathlib import Path
+        import re
 
-        git clone --depth=1 \
-          https://github.com/devnoname120/kernelsu-coccinelle.git \
-          kernelsu-coccinelle
+        def patch(path, pattern, replacement, name, count=1):
+            p = Path(path)
+            text = p.read_text()
 
-        cd kernelsu-coccinelle/scope-minimized-hooks
+            new, n = re.subn(
+                pattern,
+                replacement,
+                text,
+                count=count,
+                flags=re.MULTILINE | re.DOTALL,
+            )
 
-        ./apply.sh "$GITHUB_WORKSPACE"
+            if n != count:
+                raise SystemExit(
+                    f"[ERROR] {path}: {name}: expected {count} match(es), got {n}"
+                )
 
-        cd "$GITHUB_WORKSPACE"
+            p.write_text(new)
+            print(f"[OK] {path}: {name}")
 
-        echo "===== KernelSU manual hook symbols ====="
+        patch(
+            "fs/exec.c",
+            r'(int do_execve\(struct filename \*filename,\s*'
+            r'const char __user \*const __user \*__argv,\s*'
+            r'const char __user \*const __user \*__envp\)\s*'
+            r'\{\s*'
+            r'struct user_arg_ptr argv = \{ \.ptr\.native = __argv \};\s*'
+            r'struct user_arg_ptr envp = \{ \.ptr\.native = __envp \};)',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+                ksu_handle_execveat((int *)AT_FDCWD, &filename,
+                        &argv, &envp, NULL);
+        #endif''',
+            "do_execve hook",
+        )
 
-        grep -RnsE \
-          "ksu_execveat_hook|ksu_handle_execveat|ksu_handle_faccessat|ksu_handle_sys_read|ksu_handle_stat|ksu_handle_sys_reboot" \
-          fs/exec.c \
-          fs/open.c \
-          fs/read_write.c \
-          fs/stat.c \
-          kernel/reboot.c \
-          drivers/input/input.c \
-          2>/dev/null || true
+        patch(
+            "fs/exec.c",
+            r'(static int compat_do_execve\(struct filename \*filename,\s*'
+            r'const compat_uptr_t __user \*__argv,\s*'
+            r'const compat_uptr_t __user \*__envp\)\s*'
+            r'\{\s*'
+            r'struct user_arg_ptr argv = \{\s*'
+            r'\.is_compat = true,\s*'
+            r'\.ptr\.compat = __argv,\s*'
+            r'\};\s*'
+            r'struct user_arg_ptr envp = \{\s*'
+            r'\.is_compat = true,\s*'
+            r'\.ptr\.compat = __envp,\s*'
+            r'\};)',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+                ksu_handle_execveat((int *)AT_FDCWD, &filename,
+                        &argv, &envp, NULL);
+        #endif''',
+            "compat_do_execve hook",
+        )
 
-        echo "===== KernelSU manual hook config ====="
+        patch(
+            "fs/exec.c",
+            r'(#include <linux/tracehook\.h>\n)',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+        __attribute__((hot))
+        extern int ksu_handle_execveat(
+                int *fd,
+                struct filename **filename_ptr,
+                void *argv,
+                void *envp,
+                int *flags
+        );
+        #endif
+        ''',
+            "execve declaration",
+        )
 
-        scripts/config --file out/.config -e KSU_MANUAL_HOOK
+        patch(
+            "fs/open.c",
+            r'(SYSCALL_DEFINE3\(faccessat, int, dfd, const char __user \*, filename, int, mode\)\s*\{\s*)'
+            r'(return do_faccessat\(dfd, filename, mode\);\s*)'
+            r'(\})',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+                ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
+        #endif
+                \2\3''',
+            "faccessat hook",
+        )
 
-        grep -E \
-          '^CONFIG_KSU_MANUAL_HOOK=|^CONFIG_KSU_KPROBES_HOOK=' \
-          out/.config || true
+        patch(
+            "fs/open.c",
+            r'(#include "internal\.h"\n)',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+        __attribute__((hot))
+        extern int ksu_handle_faccessat(
+                int *dfd,
+                const char __user **filename_user,
+                int *mode,
+                int *flags
+        );
+        #endif
+        ''',
+            "faccessat declaration",
+        )
+
+        patch(
+            "fs/read_write.c",
+            r'(SYSCALL_DEFINE3\(read, unsigned int, fd, char __user \*, buf, size_t, count\)\s*\{\s*)'
+            r'(return ksys_read\(fd, buf, count\);\s*)'
+            r'(\})',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+                if (unlikely(ksu_init_rc_hook))
+                        ksu_handle_sys_read(fd, &buf, &count);
+        #endif
+                \2\3''',
+            "read hook",
+        )
+
+        patch(
+            "fs/read_write.c",
+            r'(#include <linux/uio\.h>\n)',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+        extern bool ksu_init_rc_hook __read_mostly;
+        extern __attribute__((cold)) int ksu_handle_sys_read(
+                unsigned int fd,
+                char __user **buf_ptr,
+                size_t *count_ptr
+        );
+        #endif
+        ''',
+            "read declaration",
+        )
+
+        patch(
+            "fs/stat.c",
+            r'(SYSCALL_DEFINE4\(newfstatat, int, dfd, const char __user \*, filename,\s*'
+            r'struct stat __user \*, statbuf, int, flag\)\s*\{\s*'
+            r'struct kstat stat;\s*'
+            r'int error;\s*)',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+                ksu_handle_stat(&dfd, &filename, &flag);
+        #endif''',
+            "newfstatat hook",
+        )
+
+        patch(
+            "fs/stat.c",
+            r'(#include <linux/syscalls\.h>\n)',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+        __attribute__((hot))
+        extern int ksu_handle_stat(
+                int *dfd,
+                const char __user **filename_user,
+                int *flags
+        );
+        #endif
+        ''',
+            "stat declaration",
+        )
+
+        patch(
+            "kernel/reboot.c",
+            r'(SYSCALL_DEFINE4\(reboot, int, magic1, int, magic2, unsigned int, cmd,\s*'
+            r'void __user \*, arg\)\s*\{\s*'
+            r'struct pid_namespace \*pid_ns = task_active_pid_ns\(current\);\s*'
+            r'char buffer\[256\];\s*'
+            r'int ret = 0;)',
+            r'''\1
+
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+                ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
+        #endif''',
+            "reboot hook",
+        )
+
+        patch(
+            "kernel/reboot.c",
+            r'(#include <linux/reboot\.h>\n)',
+            r'''\1
+        #ifdef CONFIG_KSU_MANUAL_HOOK
+        extern int ksu_handle_sys_reboot(
+                int magic1,
+                int magic2,
+                unsigned int cmd,
+                void __user **arg
+        );
+        #endif
+        ''',
+            "reboot declaration",
+        )
+
+        print("All KernelSU Next manual hooks applied successfully.")
+        PY
 
     - name: 4. Patch KernelSU SELinux Hide Compatibility
       run: |
@@ -130,13 +300,13 @@ jobs:
 
       run: |
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 $DEFCONFIG
-        
+
         scripts/config --file out/.config -e KSU
         scripts/config --file out/.config -e KSU_MANUAL_HOOK
-        scripts/config --file out/.config -d KPROBES
-        scripts/config --file out/.config -d KPROBE_EVENTS
         scripts/config --file out/.config -d KSU_KPROBES_HOOK
         scripts/config --file out/.config -d KSU_KPROBE_HOOKS
+        scripts/config --file out/.config -d KPROBES
+        scripts/config --file out/.config -d KPROBE_EVENTS
 
         scripts/config --file out/.config -e INPUT
         scripts/config --file out/.config -e KALLSYMS
@@ -150,51 +320,47 @@ jobs:
 
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 olddefconfig
 
-        grep -E '^(CONFIG_KSU|CONFIG_KPROBES|CONFIG_KPROBE_EVENTS|CONFIG_KSU_KPROBE|CONFIG_KSU_KPROBES_HOOK|CONFIG_OVERLAY_FS|CONFIG_TMPFS_XATTR|CONFIG_TMPFS_POSIX_ACL)=' out/.config || true
+        echo "===== KernelSU configuration ====="
 
-        if grep -q '^CONFIG_KPROBES=y' out/.config; then
-          echo "ERROR: CONFIG_KPROBES is still enabled."
-          exit 1
-        fi
+        grep -E \
+          '^(CONFIG_KSU|CONFIG_KSU_MANUAL_HOOK|CONFIG_KPROBES|CONFIG_KPROBE_EVENTS|CONFIG_KSU_KPROBES_HOOK|CONFIG_KSU_KPROBE_HOOKS|CONFIG_OVERLAY_FS|CONFIG_TMPFS_XATTR|CONFIG_TMPFS_POSIX_ACL)=' \
+          out/.config || true
 
-        if grep -q '^CONFIG_KPROBE_EVENTS=y' out/.config; then
-          echo "ERROR: CONFIG_KPROBE_EVENTS is still enabled."
-          exit 1
-        fi
-
-        if grep -q '^CONFIG_KSU_KPROBES_HOOK=y' out/.config; then
-          echo "ERROR: CONFIG_KSU_KPROBES_HOOK is still enabled."
-          exit 1
-        fi
-
-        if grep -q '^CONFIG_KSU_KPROBE_HOOKS=y' out/.config; then
-          echo "ERROR: CONFIG_KSU_KPROBE_HOOKS is still enabled."
-          exit 1
-        fi
-
-        if ! grep -q '^CONFIG_KSU=y' out/.config; then
+        if ! grep -q '^CONFIG_KSU=y$' out/.config; then
           echo "ERROR: CONFIG_KSU=y was not enabled."
           exit 1
         fi
 
-        echo "===== MANUAL HOOKS ====="
+        if ! grep -q '^CONFIG_KSU_MANUAL_HOOK=y$' out/.config; then
+          echo "ERROR: CONFIG_KSU_MANUAL_HOOK=y was not enabled."
+          exit 1
+        fi
+
+        if grep -q '^CONFIG_KPROBES=y$' out/.config; then
+          echo "ERROR: CONFIG_KPROBES is still enabled."
+          exit 1
+        fi
+
+        if grep -q '^CONFIG_KPROBE_EVENTS=y$' out/.config; then
+          echo "ERROR: CONFIG_KPROBE_EVENTS is still enabled."
+          exit 1
+        fi
+
+        if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' out/.config; then
+          echo "ERROR: CONFIG_KSU_KPROBES_HOOK is still enabled."
+          exit 1
+        fi
+
+        echo "===== Manual hooks ====="
 
         grep -RnsE \
-          "ksu_execveat_hook|ksu_handle_execveat|ksu_handle_faccessat|ksu_handle_sys_read|ksu_handle_stat|ksu_handle_sys_reboot" \
+          'ksu_handle_execveat|ksu_handle_faccessat|ksu_handle_sys_read|ksu_handle_stat|ksu_handle_sys_reboot' \
           fs/exec.c \
           fs/open.c \
           fs/read_write.c \
           fs/stat.c \
-          kernel/reboot.c \
-          drivers/input/input.c \
-          2>/dev/null || true
+          kernel/reboot.c
 
-        echo "===== CONFIG ====="
-      
-        grep -E \
-          '^CONFIG_KSU=|^CONFIG_KSU_MANUAL_HOOK=|^CONFIG_KPROBES=|^CONFIG_KPROBE_EVENTS=|^CONFIG_KSU_KPROBES_HOOK=' \
-          out/.config
-        
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1
 
     - name: 8. Package with AnyKernel3
