@@ -23,320 +23,17 @@ jobs:
           "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
           | bash -s legacy
 
-        echo "KernelSU Next source injected."
-
     - name: 3. Apply KernelSU Next Manual Hooks
       run: |
-        python3 - <<'PY'
-        from pathlib import Path
+        sudo apt-get update
+        sudo apt-get install -y coccinelle
 
-        def patch_file(path_str, replacements):
-            path = Path(path_str)
-            text = path.read_text()
+        git clone --depth=1 \
+          https://github.com/devnoname120/kernelsu-coccinelle.git \
+          kernelsu-coccinelle
 
-            for name, old, new in replacements:
-                count = text.count(old)
-
-                if count != 1:
-                    raise SystemExit(
-                        f"[ERROR] {path}: pattern '{name}' found {count} times; "
-                        "expected exactly 1 match."
-                    )
-
-                text = text.replace(old, new, 1)
-                print(f"[OK] {path}: applied {name}")
-
-            path.write_text(text)
-
-        # ========================================================
-        # fs/exec.c
-        # ========================================================
-        patch_file(
-            "fs/exec.c",
-            [
-                (
-                    "exec declarations",
-                    '#include <linux/tracehook.h>\n',
-                    '''#include <linux/tracehook.h>
-
-        #ifdef CONFIG_KSU
-        __attribute__((hot))
-        extern int ksu_handle_execveat(
-            int *fd,
-            struct filename **filename_ptr,
-            void *argv,
-            void *envp,
-            int *flags
-        );
-        #endif
-        ''',
-                ),
-                (
-                    "do_execve hook",
-                    '''int do_execve(struct filename *filename,
-                const char __user *const __user *__argv,
-                const char __user *const __user *__envp)
-        {
-                struct user_arg_ptr argv = { .ptr.native = __argv };
-                struct user_arg_ptr envp = { .ptr.native = __envp };
-                return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
-        }''',
-                    '''int do_execve(struct filename *filename,
-                const char __user *const __user *__argv,
-                const char __user *const __user *__envp)
-        {
-                struct user_arg_ptr argv = { .ptr.native = __argv };
-                struct user_arg_ptr envp = { .ptr.native = __envp };
-
-        #ifdef CONFIG_KSU
-                ksu_handle_execveat(
-                    (int *)AT_FDCWD,
-                    &filename,
-                    &argv,
-                    &envp,
-                    0
-                );
-        #endif
-
-                return do_execveat_common(
-                    AT_FDCWD,
-                    filename,
-                    argv,
-                    envp,
-                    0
-                );
-        }''',
-                ),
-                (
-                    "compat_do_execve hook",
-                    '''static int compat_do_execve(struct filename *filename,
-                const compat_uptr_t __user *__argv,
-                const compat_uptr_t __user *__envp)
-        {
-                struct user_arg_ptr argv = {
-                        .is_compat = true,
-                        .ptr.compat = __argv,
-                };
-                struct user_arg_ptr envp = {
-                        .is_compat = true,
-                        .ptr.compat = __envp,
-                };
-                return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
-        }''',
-                    '''static int compat_do_execve(struct filename *filename,
-                const compat_uptr_t __user *__argv,
-                const compat_uptr_t __user *__envp)
-        {
-                struct user_arg_ptr argv = {
-                        .is_compat = true,
-                        .ptr.compat = __argv,
-                };
-                struct user_arg_ptr envp = {
-                        .is_compat = true,
-                        .ptr.compat = __envp,
-                };
-
-        #ifdef CONFIG_KSU
-                ksu_handle_execveat(
-                    (int *)AT_FDCWD,
-                    &filename,
-                    &argv,
-                    &envp,
-                    0
-                );
-        #endif
-
-                return do_execveat_common(
-                    AT_FDCWD,
-                    filename,
-                    argv,
-                    envp,
-                    0
-                );
-        }''',
-                ),
-            ],
-        )
-
-        # ========================================================
-        # fs/open.c
-        # ========================================================
-        patch_file(
-            "fs/open.c",
-            [
-                (
-                    "faccessat declaration",
-                    '#include "internal.h"\n',
-                    '''#include "internal.h"
-
-        #ifdef CONFIG_KSU
-        __attribute__((hot))
-        extern int ksu_handle_faccessat(
-            int *dfd,
-            const char __user **filename_user,
-            int *mode,
-            int *flags
-        );
-        #endif
-        ''',
-                ),
-                (
-                    "faccessat hook",
-                    '''SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
-        {
-                return do_faccessat(dfd, filename, mode);
-        }''',
-                    '''SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
-        {
-        #ifdef CONFIG_KSU
-                ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
-        #endif
-
-                return do_faccessat(dfd, filename, mode);
-        }''',
-                ),
-            ],
-        )
-
-        # ========================================================
-        # fs/read_write.c
-        # ========================================================
-        patch_file(
-            "fs/read_write.c",
-            [
-                (
-                    "vfs_read declarations",
-                    '#include <linux/uio.h>\n',
-                    '''#include <linux/uio.h>
-
-        #ifdef CONFIG_KSU
-        extern bool ksu_vfs_read_hook __read_mostly;
-        extern __attribute__((cold)) int ksu_handle_sys_read(
-            unsigned int fd,
-            char __user **buf_ptr,
-            size_t *count_ptr
-        );
-        #endif
-        ''',
-                ),
-                (
-                    "vfs_read hook",
-                    '''ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
-        {
-                ssize_t ret;
-                if (!(file->f_mode & FMODE_READ))
-                        return -EBADF;''',
-                    '''ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
-        {
-                ssize_t ret;
-
-        #ifdef CONFIG_KSU
-                if (unlikely(ksu_vfs_read_hook))
-                        ksu_handle_sys_read(
-                            (unsigned int)-1,
-                            &buf,
-                            &count
-                        );
-        #endif
-
-                if (!(file->f_mode & FMODE_READ))
-                        return -EBADF;''',
-                ),
-            ],
-        )
-
-        # ========================================================
-        # fs/stat.c
-        # ========================================================
-        patch_file(
-            "fs/stat.c",
-            [
-                (
-                    "stat declaration",
-                    '#include <linux/syscalls.h>\n',
-                    '''#include <linux/syscalls.h>
-
-        #ifdef CONFIG_KSU
-        __attribute__((hot))
-        extern int ksu_handle_stat(
-            int *dfd,
-            const char __user **filename_user,
-            int *flags
-        );
-        #endif
-        ''',
-                ),
-                (
-                    "newfstatat hook",
-                    '''SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
-                        struct stat __user *, statbuf, int, flag)
-        {
-                struct kstat stat;
-                int error;''',
-                    '''SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
-                        struct stat __user *, statbuf, int, flag)
-        {
-                struct kstat stat;
-                int error;
-
-        #ifdef CONFIG_KSU
-                ksu_handle_stat(&dfd, &filename, &flag);
-        #endif''',
-                ),
-            ],
-        )
-
-        # ========================================================
-        # kernel/reboot.c
-        # ========================================================
-        patch_file(
-            "kernel/reboot.c",
-            [
-                (
-                    "reboot declaration",
-                    '''#include <linux/reboot.h>
-        ''',
-                    '''#include <linux/reboot.h>
-
-        #ifdef CONFIG_KSU
-        extern int ksu_handle_sys_reboot(
-            int magic1,
-            int magic2,
-            unsigned int cmd,
-            void __user **arg
-        );
-        #endif
-        ''',
-                ),
-                (
-                    "reboot hook",
-                    '''SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
-                void __user *, arg)
-        {
-                struct pid_namespace *pid_ns = task_active_pid_ns(current);
-                char buffer[256];
-                int ret = 0;''',
-                    '''SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
-                void __user *, arg)
-        {
-                struct pid_namespace *pid_ns = task_active_pid_ns(current);
-                char buffer[256];
-                int ret = 0;
-
-        #ifdef CONFIG_KSU
-                ksu_handle_sys_reboot(
-                    magic1,
-                    magic2,
-                    cmd,
-                    &arg
-                );
-        #endif''',
-                ),
-            ],
-        )
-
-        print("All manual KernelSU hooks applied successfully.")
-        PY
+        cd kernelsu-coccinelle/scope-minimized-hooks
+        ./apply.sh "$GITHUB_WORKSPACE"
 
     - name: 4. Patch KernelSU SELinux Hide Compatibility
       run: |
@@ -387,7 +84,6 @@ jobs:
         s = s.replace(old, new, 1)
 
         p.write_text(s)
-        print("[OK] selinux_hide.c patched.")
         PY
 
     - name: 5. Install Build Dependencies
@@ -413,7 +109,6 @@ jobs:
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 $DEFCONFIG
 
         scripts/config --file out/.config -e KSU
-
         scripts/config --file out/.config -d KPROBES
         scripts/config --file out/.config -d KPROBE_EVENTS
         scripts/config --file out/.config -d KSU_KPROBES_HOOK
@@ -431,12 +126,7 @@ jobs:
 
         make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 olddefconfig
 
-        echo "===== KernelSU configuration ====="
-        grep -E \
-          '^(CONFIG_KSU|CONFIG_KPROBES|CONFIG_KPROBE_EVENTS|CONFIG_KSU_KPROBE|CONFIG_OVERLAY_FS|CONFIG_TMPFS_XATTR|CONFIG_TMPFS_POSIX_ACL)=' \
-          out/.config || true
-
-        echo "===== Checking that Kprobes hooks are disabled ====="
+        grep -E '^(CONFIG_KSU|CONFIG_KPROBES|CONFIG_KPROBE_EVENTS|CONFIG_KSU_KPROBE|CONFIG_KSU_KPROBES_HOOK|CONFIG_OVERLAY_FS|CONFIG_TMPFS_XATTR|CONFIG_TMPFS_POSIX_ACL)=' out/.config || true
 
         if grep -q '^CONFIG_KPROBES=y' out/.config; then
           echo "ERROR: CONFIG_KPROBES is still enabled."
@@ -448,13 +138,13 @@ jobs:
           exit 1
         fi
 
-        if grep -q '^CONFIG_KSU_KPROBE_HOOKS=y' out/.config; then
-          echo "ERROR: KSU Kprobe hooks are still enabled."
+        if grep -q '^CONFIG_KSU_KPROBES_HOOK=y' out/.config; then
+          echo "ERROR: CONFIG_KSU_KPROBES_HOOK is still enabled."
           exit 1
         fi
 
-        if grep -q '^CONFIG_KSU_KPROBES_HOOK=y' out/.config; then
-          echo "ERROR: KSU Kprobes hook option is still enabled."
+        if grep -q '^CONFIG_KSU_KPROBE_HOOKS=y' out/.config; then
+          echo "ERROR: CONFIG_KSU_KPROBE_HOOKS is still enabled."
           exit 1
         fi
 
@@ -462,8 +152,6 @@ jobs:
           echo "ERROR: CONFIG_KSU=y was not enabled."
           exit 1
         fi
-
-        echo "KernelSU manual-hook configuration verified."
 
         make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1
 
@@ -483,6 +171,12 @@ jobs:
           "s/kernel.string=.*/kernel.string=$ZIP_MSG/g" \
           anykernel.sh
 
+        if ! grep -q '^device.name2=gemstone$' anykernel.sh; then
+          sed -i \
+            '/^device.name1=moonstone$/a device.name2=gemstone' \
+            anykernel.sh
+        fi
+
         zip -r9 \
           ../POCOX5-KernelSU-Next.zip \
           * \
@@ -492,15 +186,13 @@ jobs:
       run: |
         test -f POCOX5-KernelSU-Next.zip
 
-        echo "===== ZIP CONTENTS ====="
         unzip -l POCOX5-KernelSU-Next.zip
-
-        echo "===== ZIP TEST ====="
         unzip -t POCOX5-KernelSU-Next.zip
 
-        echo "===== REQUIRED FILES ====="
         unzip -Z1 POCOX5-KernelSU-Next.zip | grep -Fx "Image"
         unzip -Z1 POCOX5-KernelSU-Next.zip | grep -Fx "anykernel.sh"
+
+        unzip -p POCOX5-KernelSU-Next.zip anykernel.sh | grep -E '^device.name[0-9]*=|^do.devicecheck='
 
     - name: 10. Generate Build Version
       id: version
@@ -526,7 +218,6 @@ jobs:
           "POCOX5-KernelSU-Next-${VERSION}.zip" \
           > "POCOX5-KernelSU-Next-${VERSION}.zip.sha256"
 
-        echo "===== SHA256 ====="
         cat \
           "POCOX5-KernelSU-Next-${VERSION}.zip.sha256"
 
@@ -555,6 +246,7 @@ jobs:
         Device: POCO X5 5G (moonstone)
         KernelSU-Next: legacy / manual hooks
         Kprobes: disabled
+        crDroid Recovery codename: gemstone
         Commit: ${GITHUB_SHA}
 
         SHA-256:
