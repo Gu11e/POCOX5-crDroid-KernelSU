@@ -109,7 +109,7 @@ jobs:
         ZIP_MSG="Kernel moonstone with KernelSU-Next by ${{ github.actor }}"
         sed -i "s/kernel.string=.*/kernel.string=$ZIP_MSG/g" anykernel.sh
         
-        zip -r9 ../Kernel-KSU-POCOX5.zip * -x .git README.md *placeholder
+        zip -r9 ../POCOX5-KernelSU-Next.zip * -x .git README.md *placeholder
 
     - name: 7. Validate ZIP
       run: |
