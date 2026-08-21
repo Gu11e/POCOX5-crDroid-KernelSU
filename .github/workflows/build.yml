@@ -174,7 +174,8 @@ jobs:
             r'''\1
         #ifdef CONFIG_KSU_MANUAL_HOOK
                 ksu_handle_stat(&dfd, &filename, &flag);
-        #endif''',
+        #endif
+        ''',
             "newfstatat hook",
         )
 
