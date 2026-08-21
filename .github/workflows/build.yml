@@ -6,6 +6,9 @@ on:
     branches:
       - '16.0'
 
+permissions:
+    contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -102,10 +105,73 @@ jobs:
         git clone https://github.com/Gu11e/AnyKernel3-POCOX5.git AnyKernel3
         cp out/arch/arm64/boot/Image AnyKernel3/
         cd AnyKernel3
+        
+        ZIP_MSG="Kernel moonstone with KernelSU-Next by ${{ github.actor }}"
+        sed -i "s/kernel.string=.*/kernel.string=$ZIP_MSG/g" anykernel.sh
+        
         zip -r9 ../Kernel-KSU-POCOX5.zip * -x .git README.md *placeholder
 
-    - name: 7. Upload Final .zip Artifact
+    - name: 7. Validate ZIP
+      run: |
+          test -f POCOX5-KernelSU-Next.zip
+
+          echo "===== ZIP CONTENTS ====="
+          unzip -l POCOX5-KernelSU-Next.zip
+
+          echo "===== ZIP TEST ====="
+          unzip -t POCOX5-KernelSU-Next.zip
+
+          echo "===== REQUIRED FILES ====="
+          unzip -Z1 POCOX5-KernelSU-Next.zip | grep -Fx "Image"
+          unzip -Z1 POCOX5-KernelSU-Next.zip | grep -Fx "anykernel.sh"
+
+    - name: 8. Generate Build Version
+      id: version
+      run: |
+          BUILD_DATE="$(git show -s --date=format:'%Y.%m.%d' --format='%cd' HEAD)"
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          VERSION="v${BUILD_DATE}-${SHORT_SHA}"
+
+          echo "BUILD_DATE=${BUILD_DATE}" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+          echo "Version: ${VERSION}"
+          echo "Commit:  $(git rev-parse HEAD)"
+
+    - name: 9. Rename Release Files
+      run: |
+          mv POCOX5-KernelSU-Next.zip "POCOX5-KernelSU-Next-${VERSION}.zip"
+
+          sha256sum "POCOX5-KernelSU-Next-${VERSION}.zip" > "POCOX5-KernelSU-Next-${VERSION}.zip.sha256"
+
+          echo "===== SHA256 ====="
+          cat "POCOX5-KernelSU-Next-${VERSION}.zip.sha256"
+
+    - name: 10. Upload Build Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-KSU-POCOX5
-        path: Kernel-KSU-POCOX5.zip
+        name: "POCOX5-KernelSU-Next-${{ env.VERSION }}"
+        path: |
+            POCOX5-KernelSU-Next-${{ env.VERSION }}.zip
+            POCOX5-KernelSU-Next-${{ env.VERSION }}.zip.sha256
+            retention-days: 14
+
+    - name: 11. Create GitHub Release
+      if: github.event_name == 'push'
+      env:
+          GH_TOKEN: ${{ github.token }}
+      run: |
+          gh release create "${VERSION}" \
+            "POCOX5-KernelSU-Next-${VERSION}.zip" \
+            "POCOX5-KernelSU-Next-${VERSION}.zip.sha256" \
+            --target "${GITHUB_SHA}" \
+            --title "POCO X5 KernelSU-Next ${VERSION}" \
+            --notes "Automated kernel build.
+
+          Device: POCO X5 5G (moonstone)
+          KernelSU-Next: legacy / Kprobes
+          Commit: ${GITHUB_SHA}
+
+          SHA-256:
+          $(cat "POCOX5-KernelSU-Next-${VERSION}.zip.sha256")"
