@@ -444,7 +444,7 @@ jobs:
 
         Device: POCO X5 5G (moonstone)
         KernelSU-Next: legacy / manual hooks
-        Kprobes: disabled
+        Kprobes: enabled
         crDroid Recovery codename: gemstone
         Commit: ${GITHUB_SHA}
 
